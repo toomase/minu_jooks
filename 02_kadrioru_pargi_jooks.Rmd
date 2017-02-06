@@ -16,7 +16,7 @@ library(ggmap)
 library(lubridate)
 library(gganimate)
 library(rgeos)
-library(xts)  # aja ümardamiseks 5 sekundi täpsusega
+library(xts)  # aja ümardamiseks 15 sekundi täpsusega
 library(ggthemes)
 ```
 
@@ -279,6 +279,6 @@ animatsioon <- ggmap(kadrioru_kaart) +
 
 animation::ani.options(interval = 1/10)
 
-gganimate(animatsioon, "kadrioru_pargi_jooks_2.mp4", ani.width = 800, 
+gganimate(animatsioon, "kadrioru_pargi_jooks.mp4", ani.width = 800, 
           ani.height = 800)
 ```

@@ -1,0 +1,55 @@
+---
+title: "Katetus jooksu visualiseerimiseks"
+output: html_notebook
+---
+
+Katseta jooksu andmetega. Kas on võimalik neid mõistlikult visualiseerida.
+```{r}
+library(tidyverse)
+library(lubridate)
+library(sf)
+library(sp)
+library(gganimate)
+library(ggmap)
+
+load("~/Dropbox/DataScience/R/sport/output/track.rdata")
+load("~/Dropbox/DataScience/R/sport/output/trackpoints.rdata")
+```
+
+```{r}
+glimpse(trackpoints)
+glimpse(track)
+```
+
+Leia katsetamiseks suvalise paari jooksu andmed
+Kanna animeeritud kaardile kõik oma Kadrioru kodust tehtud jooksud.
+```{r}
+set.seed(31)
+naited <- trackpoints %>% 
+  filter(sport == "Running") %>% 
+  sample_n(10) %>% 
+  .$id
+
+df <- trackpoints %>% 
+  filter(id %in% naited, !is.na(lat), !is.na(long)) %>% 
+  mutate(aeg = round_date(date, "minute")) %>% 
+  group_by(id, aeg) %>% 
+  mutate(jrk = ntile(aeg, 4)) %>% 
+  distinct(id, aeg, jrk, .keep_all = TRUE) %>% 
+  ungroup() %>% 
+  group_by(id) %>% 
+  mutate(jrk = row_number())
+
+tallinna_kaart <- get_map("tallinn, kadriorg", zoom = 13, maptype = "toner-lite")
+
+kaart <- ggmap(tallinna_kaart) +
+    geom_path(data = df, aes(x = long, y = lat, frame = jrk, cumulative = TRUE, 
+                           group = id), color = "#ffeda0") +
+  geom_point(data = df, aes(x = long, y = lat, frame = jrk, 
+                           group = id), color = "red", size = 5)
+
+animation::ani.options(interval = 1/15)
+
+gganimate(kaart, "kaart_2.mp4", ani.width = 800, 
+          ani.height = 800)
+```

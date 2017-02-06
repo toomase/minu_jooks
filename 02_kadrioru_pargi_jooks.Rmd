@@ -1,0 +1,284 @@
+---
+title: "Jooksmine Kadrioru pargis"
+output: html_notebook
+---
+
+Tee animeeritud kaart kõigist oma Kadrioru pargis tehtud ca 400-st jooksust. Selleks lae Endomondo jooksu andmed .tcx failidest. Eelnevalt tõmbasin kõik oma treeningute andmed dropboxi alla tapiriik.com rakenduse abil.
+
+```{r setup}
+library(tidyverse)
+library(trackeR)  # .tcx failide laadimiseks
+library(stringr)
+library(mapview)
+library(sf)
+library(sp)
+library(ggmap)
+library(lubridate)
+library(gganimate)
+library(rgeos)
+library(xts)  # aja ümardamiseks 5 sekundi täpsusega
+library(ggthemes)
+```
+
+Leia ainult jooksmas käimiste trackide filepath. Selle järgi saab kõik failid sisse laadida.
+```{r}
+# failide nimekiri laadimiseks
+files = list.files("/home/rstudio/Dropbox/DataScience/R/sport/data", full.names = TRUE)
+
+jooksud <- files %>% 
+  data_frame() %>% 
+  select(filepath = 1) %>% 
+  filter(str_detect(filepath, "Running")) %>%  # ainult need, kus faili nimes on Running
+  .$filepath
+```
+
+Funktsioon tcx failide laadimiseks ning dataframe filepathi kirjutamiseks
+```{r}
+lae_tcx <- function(x){
+  tryCatch(
+    {
+      df <- readTCX(x)
+      
+      df %>% 
+        mutate(filepath = x)
+      
+    }, error = function(e) NULL
+  )
+}
+```
+
+Lae kõikide jooksmas käimiste andmed ja kirjuta need RData failiks. Lisaks mõõda kui kaua see andmete laadimine aega võtab.
+Kuna tegemist on üsna ajamahuka protsessiga, siis tee seda ühekordselt ja salvesta RData.
+```{r}
+# system.time({
+#   minu_jooksud_raw <- map_df(jooksud, lae_tcx)
+#   
+#   save(minu_jooksud_raw, file = "data/minu_jooksud_raw.RData")
+# })
+```
+
+Lae RData andmed, et ei peaks kordama ajamahukat andmete laadimist üksikutest failidest (500 faili ca 25 min).
+```{r}
+load("data/minu_jooksud_raw.RData")
+```
+
+```{r}
+glimpse(minu_jooksud_raw)
+```
+
+## Leia need jooksud, mis algasid Kadrioru kodust
+
+Leia kõigi oma jooksude alguspunkt ja kanna need kaardile. 
+```{r}
+alguspunkt <- minu_jooksud_raw %>% 
+  filter(!is.na(latitude)) %>% 
+  group_by(filepath) %>% 
+  filter(row_number() == 1)
+
+# Eesti projektsiooni kirjeldus, mis on vajalik andmete kaardile kandmiseks
+eesti_proj4 <- "+proj=lcc +lat_1=59.33333333333334 +lat_2=58 +lat_0=57.51755393055556 +lon_0=24 +x_0=500000 +y_0=6375000 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs"
+
+alguspunkt_sf <- alguspunkt %>% 
+  ungroup()
+
+# lisa eraldi koordinaatide veerg, et saaks teha spatialpointsdataframe objekti
+# see on vajalik andmete sidumiseks majade polygoni tabeliga
+coordinates(alguspunkt_sf) <- ~ longitude + latitude
+
+# anna projektsioon
+proj4string(alguspunkt_sf) <- CRS("+proj=longlat")
+
+# muuda projektsioon samaks, mis majade polügoni tabelil
+alguspunkt_sf <- spTransform(alguspunkt_sf, eesti_proj4)
+
+mapview(alguspunkt_sf)
+```
+
+Leia iga jooksu lõppunkt ja kanna need kaardile. 
+```{r}
+lopppunkt <- minu_jooksud_raw %>% 
+  filter(!is.na(latitude)) %>% 
+  group_by(filepath) %>%
+  arrange(desc(time)) %>% 
+  filter(row_number() == 1)
+
+lopppunkt_sf <- lopppunkt %>% 
+  ungroup()
+
+# lisa eraldi koordinaatide veerg, et saaks teha spatialpointsdataframe objekti
+# see on vajalik andmete sidumiseks majade polygoni tabeliga
+coordinates(lopppunkt_sf) <- ~ longitude + latitude
+
+# anna projektsioon
+proj4string(lopppunkt_sf) <- CRS("+proj=longlat")
+
+# muuda projektsioon samaks, mis majade polügoni tabelil
+lopppunkt_sf <- spTransform(lopppunkt_sf, eesti_proj4)
+
+mapview(lopppunkt_sf)
+```
+
+Leia Vilmsi 43 aadressi kohta ala (170m raadiusega), milles olevaid jooksude alguspunkte võtan arvesse.
+```{r}
+vilmsi_43 <- geocode("Vilmsi 43, Tallinn")
+
+coordinates(vilmsi_43) <- ~ lon + lat
+
+proj4string(vilmsi_43) <- CRS("+proj=longlat")
+
+vilmsi_43 <- spTransform(vilmsi_43, eesti_proj4)
+
+# loo 170m raadiusega buffer Vilmsi 43 aadressi ümber
+kadriorg_buffer <- vilmsi_43 %>% 
+  gBuffer(width = 170, byid = FALSE)
+
+mapview(kadriorg_buffer)
+```
+
+Leia need jooksud, mille alguspunkt on Vilmsi 43 aadressi lähedal
+```{r}
+alguspunkt_kadriorg_raw <- over(alguspunkt_sf, kadriorg_buffer)
+
+alguspunkt_kadriorg <- alguspunkt_sf %>% 
+  st_as_sf() %>% 
+  bind_cols(data_frame(alguspunkt_kadriorg_raw)) %>% 
+  filter(alguspunkt_kadriorg_raw == 1)
+
+mapview(alguspunkt_kadriorg)
+```
+
+
+Leia need jooksud, mille lõpppunkt on Vilmsi 43 aadressi lähedal
+```{r}
+lopppunkt_kadriorg_raw <- over(lopppunkt_sf, kadriorg_buffer)
+
+lopppunkt_kadriorg <- lopppunkt_sf %>% 
+  st_as_sf() %>% 
+  bind_cols(data_frame(lopppunkt_kadriorg_raw)) %>% 
+  filter(lopppunkt_kadriorg_raw == 1)
+
+mapview(lopppunkt_kadriorg)
+```
+
+Leia nende jooksude trackid, mille algus ja lõpp on Vilmsi 43 aadressi lähedal. Lisaks ümarda kõik ajad 15 sekundi täpsusega ja jäta alles esimene väärtus tabelist.
+Kuva graafikul jooksude jagunemine nende ajalise pikkuse järgi.
+```{r}
+kadrioru_jooks_raw <- minu_jooksud_raw %>% 
+  inner_join(alguspunkt_kadriorg %>% as.data.frame() %>% select(filepath)) %>%
+  inner_join(lopppunkt_kadriorg %>% as.data.frame() %>% select(filepath)) %>%
+  filter(!is.na(latitude))
+
+kadrioru_jooks <- kadrioru_jooks_raw %>% 
+  ungroup() %>% 
+  select(filepath, time, latitude, longitude) %>% 
+  distinct(filepath, latitude, longitude, .keep_all = TRUE) %>%  # kustuta korduvaad koordinaadid
+  mutate(time_2 = align.time(time, n = 15)) %>%  # ümarda aeg 15 sek täpsusega
+  distinct(filepath, time_2, .keep_all = TRUE)  # jäta iga 15 sekundi kohta alles esimene punkt
+
+# Arvuta iga jooksu aeg ja tee histogramm
+kadrioru_jooks %>% 
+  group_by(filepath) %>% 
+  top_n(1) %>% 
+  bind_rows(kadrioru_jooks %>% 
+              group_by(filepath) %>% 
+              top_n(1, desc(time_2))) %>% 
+  group_by(filepath) %>% 
+  arrange(time) %>% 
+  mutate(kestvus = difftime(time_2, lag(time_2), units = "mins")) %>% 
+  filter(!is.na(kestvus)) %>% 
+  ggplot(aes(kestvus)) +
+  geom_histogram(binwidth = 5)
+```
+
+Leia iga jooksu ajaline kestus MM:SS formaadis 15 sekundiste osade kaupa.
+```{r}
+kadrioru_jooks_ajaga <- kadrioru_jooks %>% 
+  group_by(filepath) %>% 
+  mutate(vahe = as.numeric(difftime(time_2, lag(time_2), units = "secs")),  # ajavahe kahe punkti vahel sekundites
+         vahe = ifelse(is.na(vahe), 0, vahe),
+         aeg = cumsum(vahe) / 60,  # kumulatiivne kulunud aeg minutites
+         aeg_min_sec = aeg) %>% 
+  ungroup() %>% 
+  separate(aeg_min_sec, c("min", "sec"), "\\.") %>%  # minutid ja sekundid eraldi veergudesse
+  mutate(sec = ifelse(is.na(sec), "00", sec),
+         # teisenda MM:SS formaati
+         aeg_min_sec = str_c(ifelse(as.numeric(min) < 10, str_c(0, min), min), ":", 
+                       ifelse(sec == "25", "15",
+                              ifelse(sec == "5", "30",
+                                     ifelse(sec == "75", "45", "00")))),
+         aeg_min_sec_factor = fct_reorder(as.factor(aeg_min_sec), aeg))  # järjesta loogiliselt
+```
+
+Leia Kadrioru pargi ala ümbritsev buffer, mille järgi saan arvesse võtta ainult need jooksud, mis on tervenisti toimunud pargis.
+```{r}
+kadrioru_park <- geocode("Kadrioru park, Tallinn")
+
+coordinates(kadrioru_park) <- ~ lon + lat
+
+proj4string(kadrioru_park) <- CRS("+proj=longlat")
+
+kadrioru_park <- spTransform(kadrioru_park, eesti_proj4)
+
+# loo 1100m raadiusega buffer Kadrioru pargi ümber
+kadrioru_park_buffer <- kadrioru_park %>% 
+  gBuffer(width = 1100, byid = FALSE)
+
+mapview(kadrioru_park_buffer)
+```
+
+
+Leia need jooksud, mis on tervenisti toimunud Kadrioru pargis
+```{r}
+kadrioru_jooks_ajaga_sf <- kadrioru_jooks_ajaga %>% 
+  ungroup()
+
+# lisa eraldi koordinaatide veerg, et saaks teha spatialpointsdataframe objekti
+# see on vajalik andmete sidumiseks majade polygoni tabeliga
+coordinates(kadrioru_jooks_ajaga_sf) <- ~ longitude + latitude
+
+# anna projektsioon
+proj4string(kadrioru_jooks_ajaga_sf) <- CRS("+proj=longlat")
+
+# muuda projektsioon samaks, mis majade polügoni tabelil
+kadrioru_jooks_ajaga_sf <- spTransform(kadrioru_jooks_ajaga_sf, eesti_proj4)
+
+# leia jooksud, mis on tervenisti toimunud pargis
+jooksud_pargis <- kadrioru_jooks_ajaga_sf %>% 
+  st_as_sf() %>% 
+  bind_cols(data_frame(pargis = over(kadrioru_jooks_ajaga_sf, kadrioru_park_buffer))) %>% 
+  as.data.frame() %>% 
+  group_by(filepath) %>% 
+  summarise(n = n(),
+            pargis = sum(pargis)) %>% 
+  filter(n == pargis) %>% 
+  select(filepath)
+```
+
+
+Koosta animatsioon oma Kadrioru pargis tehtud jooksudest (258 jooksu kokku)
+```{r}
+df <- kadrioru_jooks_ajaga %>%
+  inner_join(jooksud_pargis)
+
+# Kadrioru piirkonna koordinaadid
+kadriorg <- c(left = 24.7713, bottom = 59.43131, right = 24.80914, 
+             top = 59.44667)
+
+# Kadrioru aluskaart
+kadrioru_kaart <- get_map(kadriorg, zoom = 15, 
+                          # maptype = "toner-lite",
+                          source = "google", maptype = "hybrid")
+
+animatsioon <- ggmap(kadrioru_kaart) +
+  geom_path(data = df, aes(x = longitude, y = latitude, frame = aeg_min_sec, cumulative = TRUE, 
+                           group = filepath), color = "#ffeda0", size = 0.1, alpha = 0.2) +
+  geom_point(data = df, aes(x = longitude, y = latitude, frame = aeg_min_sec, 
+                           group = filepath), color = "red", size = 3) +
+  labs(title = "Aeg: ") +
+  theme_map()
+
+animation::ani.options(interval = 1/10)
+
+gganimate(animatsioon, "kadrioru_pargi_jooks_2.mp4", ani.width = 800, 
+          ani.height = 800)
+```
